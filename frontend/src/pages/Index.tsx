@@ -121,7 +121,7 @@ const Index: React.FC = () => {
                     🎯 Recommended Jobs
                   </h3>
                   <div className="grid gap-4 md:grid-cols-1 lg:grid-cols-1">
-                    <span className='bg-green-500 w-[20%] text-center rounded-md text-white font-bold p-2'>Socre: {resumeData.metrics.overall_score} %</span>
+                    <span className='bg-green-500 w-[20%] text-center rounded-md text-white font-bold p-2'>Score: {resumeData.metrics.overall_score} %</span>
                     {resumeData.recommendations.recommended_jobs.map((job, idx) => (
                       <p key={idx} className='p-2 rounded-md shadow-md'>{job}</p>
                     ))}
