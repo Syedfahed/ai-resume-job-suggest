@@ -1,7 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import spacy
-import pandas as pd
 from typing import Dict, List
 import asyncio
 import io
@@ -9,20 +7,40 @@ from PyPDF2 import PdfReader
 from docx import Document
 import re
 from collections import defaultdict
+from typing import Optional
 
 app = FastAPI(title="AI Resume Scanner API")
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080"],  # React app URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Load spaCy model
-nlp = spacy.load("en_core_web_sm")
+# Optional spaCy support
+nlp: Optional[object] = None
+
+
+def _load_spacy_nlp() -> Optional[object]:
+    try:
+        import spacy  # type: ignore
+    except Exception:
+        return None
+    try:
+        return spacy.load("en_core_web_sm")
+    except OSError:
+        try:
+            from spacy.cli import download as spacy_download  # type: ignore
+            spacy_download("en_core_web_sm")
+            return spacy.load("en_core_web_sm")
+        except Exception:
+            return None
+
+
+nlp = _load_spacy_nlp()
 
 
 class ResumeParser:
@@ -40,7 +58,8 @@ class ResumeParser:
         pdf_reader = PdfReader(io.BytesIO(file_content))
         text = ""
         for page in pdf_reader.pages:
-            text += page.extract_text()
+            page_text = page.extract_text() or ""
+            text += page_text
         return text
 
     def extract_text_from_docx(self, file_content: bytes) -> str:
@@ -52,7 +71,7 @@ class ResumeParser:
 
     def extract_contact_info(self, text: str) -> Dict:
         email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-        phone_pattern = r'(\+\d{1,3}[-.\s]?)?(\(?\d{3}\)?[-.\s]?)?[\d\-.\s]{7,10}'
+        phone_pattern = r'(?:\+?\d[\d\-\s().]{7,}\d)'
 
         emails = re.findall(email_pattern, text)
         phones = re.findall(phone_pattern, text)
@@ -63,22 +82,22 @@ class ResumeParser:
         }
 
     def extract_skills(self, text: str) -> List[str]:
-        doc = nlp(text.lower())
         found_skills = []
 
         for skill in self.skills_database:
             if skill.lower() in text.lower():
                 found_skills.append(skill)
 
-        for ent in doc.ents:
-            if ent.label_ in ["ORG", "PRODUCT", "LANGUAGE"]:
-                if ent.text.title() not in found_skills:
-                    found_skills.append(ent.text.title())
+        if nlp is not None:
+            doc = nlp(text.lower())
+            for ent in doc.ents:
+                if ent.label_ in ["ORG", "PRODUCT", "LANGUAGE"]:
+                    if ent.text.title() not in found_skills:
+                        found_skills.append(ent.text.title())
 
         return list(set(found_skills))
 
     def extract_experience(self, text: str) -> List[Dict]:
-        doc = nlp(text)
         experiences = []
 
         experience_patterns = [
@@ -101,11 +120,25 @@ class ResumeParser:
         job_scores = defaultdict(int)
         skills_to_learn = defaultdict(list)
 
+        def rough_similarity(a: str, b: str) -> float:
+            a_l = a.lower()
+            b_l = b.lower()
+            if a_l == b_l:
+                return 1.0
+            if a_l in b_l or b_l in a_l:
+                return 0.9
+            return 0.0
+
         for job, required_skills in self.job_roles.items():
             matched = set()
             for skill in required_skills:
                 for user_skill in user_skills:
-                    if nlp(skill.lower()).similarity(nlp(user_skill.lower())) > 0.75:
+                    sim = (
+                        nlp(skill.lower()).similarity(nlp(user_skill.lower()))
+                        if nlp is not None
+                        else rough_similarity(skill, user_skill)
+                    )
+                    if sim > 0.75:
                         matched.add(skill)
                         break
             score = len(matched)
